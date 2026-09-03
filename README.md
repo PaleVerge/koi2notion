@@ -1,177 +1,109 @@
+# Koi2Notion
 
-<!-- PROJECT OVERVIEW -->
-<p align="center">
-  <img width="500" src="https://i.imgur.com/mJOjtvo.png">
-</p>
-<!-- <h1 align="center">Kindle2Notion</h1> -->
-<p align="center">
-  A program to copy all your Kindle highlights and notes to a page in Notion. 
-  <br />
-  <a href="https://github.com/paperboi/Kindle2Notion">Explore the docs</a>
-  ·
-  <a href="https://github.com/paperboi/Kindle2Notion/issues">File issues and feature requests here</a>
-</p>
-<p align="center">
-  If you found this script helpful or appreciate my work, you can support me here:
-  <br><br>
-  <a href="https://www.producthunt.com/posts/kindle2notion?utm_source=badge-featured&utm_medium=badge&utm_souce=badge-kindle2notion" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=295918&theme=light" alt="Kindle2Notion - Export your Kindle clippings to a Notion database. | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
-  <a href="https://www.buymeacoffee.com/jeffreyjacob" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 54px;" height="54"></a>
-</p>
+将 Kindle 剪贴板（`My Clippings.txt`）中的高亮和笔记同步到 Notion 数据库。
 
-[![Downloads][downloads-shield]][downloads-url]
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
-[![MIT License][license-shield]][license-url]
-[![LinkedIn][linkedin-shield]][linkedin-url]
+## 功能
 
-<!-- TABLE OF CONTENTS -->
-## Table of Contents
+- **中文剪贴板解析** — 支持 Kindle 中文系统导出的格式（页/位置/添加于/笔记）
+- **增量同步** — 基于文件签名（mtime + size）跳过未变化的文件，已同步的条目不会重复写入
+- **标题模糊匹配** — NFC 标准化 + casefold，避免因编码差异创建重复页面
+- **作者同步** — 从剪贴板解析的作者名自动写入 Notion 数据库的「作者」属性
+- **笔记关联** — 按页码/位置范围匹配，将笔记附加到对应的高亮下方
+- **Watch 模式** — 定时监听文件变化，自动触发同步
+- **自定义 Notion 客户端** — 基于 `requests`，内置重试（429/5xx/SSL），无需 `notional` 等重型依赖
 
-- [Table of Contents](#table-of-contents)
-- [About The Project](#about-the-project)
-- [Getting Started](#getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Installation & Setup](#installation--setup)
-- [Usage](#usage)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
-- [Contact](#contact)
+## 前置条件
 
+- Python 3.10+
+- 一个 Notion 集成 Token（[在此创建](https://www.notion.so/my-integrations)）
+- 目标数据库需要包含以下属性：
 
+| 属性名 | 类型 | 说明 |
+|--------|------|------|
+| 书名 | title | 书名（默认标题属性，重命名为「书名」） |
+| 作者 | rich_text | 作者名 |
 
-<!-- ABOUT THE PROJECT -->
-## About The Project
+数据库需要与你的 Notion 集成共享（在数据库页面点 Share → 选择集成）。
 
-![Kindle2Notion Demo][product-demo]
+## 安装
 
-A Python package to export all the clippings from your Kindle device to a page in Notion. Run this script whenever you plug in your Kindle device to your PC.
+```bash
+cd kindle2notion
+pip install -r requirements.txt
+```
 
-A key inspiration behind this project was the notes saving feature on Google Play Books, which automatically syncs all your highlights from a book hosted on the service to a Google Doc in real time. I wanted a similar feature for my Kindle and this project is one step towards a solution for this problem.
+## 配置
 
-**Intended for**
-- Avid readers who would want to browse through their prior reads and highlights anytime anywhere.
-- For those who like to take notes alongside their highlights.
+### 交互式初始化
 
+```bash
+python -m kindle2notion init
+```
 
-<!-- GETTING STARTED -->
-## Getting Started
+按提示输入 Notion Token、数据库 ID 和 `My Clippings.txt` 路径，会自动生成 `config.json`。
 
+### 手动配置
 
-> **NOTE**
-> Need a step-by-step guide to setting this package up? Click [here](https://kindle2notion.notion.site/Kindle2Notion-8a9683c9b19546c3b1cf42a68aceebee) for the full guide. 
+在项目根目录创建 `config.json`：
 
-To get a local copy up and running follow these simple steps:
+```json
+{
+    "notion_token": "ntn_xxx",
+    "database_id": "你的数据库 ID",
+    "clippings_file": "E:\\Kindle\\documents\\My Clippings.txt",
+    "title_alias": null,
+    "watch_interval": 300
+}
+```
 
-### Prerequisites
+| 字段 | 说明 |
+|------|------|
+| `notion_token` | Notion 集成 Token |
+| `database_id` | 目标数据库 ID（从数据库 URL 中获取） |
+| `clippings_file` | `My Clippings.txt` 的完整路径 |
+| `title_alias` | 可选，标题别名映射文件路径（JSON），用于将剪贴板中的书名映射到 Notion 中的书名 |
+| `watch_interval` | Watch 模式下的检查间隔，单位秒，默认 300 |
 
-* A Kindle device.
-* A Notion account to store your links.
-* Python 3 on your system to run the code.
+## 使用
 
-### Installation & Setup
+### 单次同步
 
-> **NOTE** 
-> As of 10-07-2022, the latest update to this package relies on the offical Notion API for sending API requests. This requires you to create an integration token from [here](https://www.notion.so/my-integrations). For old users, you'd have to switch to this method as well since `notion-py` isn't being maintained anymore.
- 
-1. Install the library.
-    ```sh
-    pip install kindle2notion
-    ```
-2. Create an integration on Notion.
-      1. Duplicate this [database template](https://kindle2notion.notion.site/6d26062e3bb04dd89b988806978c1fe7?v=0d394a8162cc481280966b35a37465c2) to your the workspace you want to use for storing your Kindle clippings.
-      2. Open _Settings & Members_ from the left navigation bar.
-      3. Select the _Integrations_ option listed under _Workspaces_ in the settings modal.
-      4. Click on _Develop your own integrations_ to redirect to the integrations page.
-      5. On the integrations page, select the _New integration_ option and enter the name of the integration and the workspace you want to use it with. Hit submit and your internal integration token will be generated.
-3. Go back to your database page and click on the _Share_ button on the top right corner. Use the selector to find your integration by its name and then click _Invite_. Your integration now has the requested permissions on the new database. 
+```bash
+python -m kindle2notion
+```
 
+### Watch 模式
 
-<!-- USAGE EXAMPLES -->
-## Usage
+```bash
+python -m kindle2notion --watch
+```
 
-1. Plug in your Kindle device to your PC.
-    
-2. You need the following three arguments in hand before running the code:
-   1. Take `your_notion_auth_token` from the secret key bearer token provided.
-   2. Find `your_notion_database_id` from the URL of the database you have copied to your workspace. For reference,
-      ```
-      https://www.notion.so/myworkspace/a8aec43384f447ed84390e8e42c2e089?v=...
-                                        |--------- Database ID --------|
-      ```
-   3. `your_kindle_clippings_file` is the path to your `My Clippings File.txt` on your Kindle.
+监听 `My Clippings.txt` 的文件变化，检测到变化后自动同步。通过 `sync_state.json` 记录已处理的文件签名，避免重复同步。
 
-3. Additionally, you may modify some default parameters of the command-line with the following options of the CLI:
-   - ```--enable_highlight_date```  Set to False if you don't want to see the "Date Added" information in Notion.
-   - ```--enable_book_cover```      Set to False if you don't want to store the book cover in Notion.
-    
-4. Export your Kindle highlights and notes to Notion!
-   - On MacOS and UNIX,
-   ```sh
-   kindle2notion 'your_notion_auth_token' 'your_notion_table_id' 'your_kindle_clippings_file'
-   ```
-   - On Windows
-   ```sh
-   python -m kindle2notion 'your_notion_auth_token' 'your_notion_table_id' 'your_kindle_clippings_file'
-   ```
-You may also avail help with the following command:
-   ```sh
-   kindle2notion --help
-   python -m kindle2notion --help
-   ```
+## 项目结构
 
-> **NOTE**
-> This code has been tested on a 4th Gen Kindle Paperwhite on both MacOS and Windows.
+```
+kindle2notion/
+├── config.json          # 配置文件（含 Token，已 gitignore）
+├── sync_state.json      # Watch 模式的状态记录
+├── kindle2notion/
+│   ├── __main__.py      # CLI 入口，配置加载，watch 循环
+│   ├── reading.py       # 读取 My Clippings.txt（UTF-8-sig + BOM 处理）
+│   ├── parsing.py       # 解析剪贴板（中英文格式）
+│   ├── exporting.py     # 导出到 Notion（去重、标题匹配、笔记配对）
+│   └── notion_client.py # Notion API 客户端
+└── tests/
+```
 
+## 同步逻辑
 
-<!-- ROADMAP -->
-## Roadmap
+1. 读取并解析 `My Clippings.txt`，按书名分组
+2. 对每本书，在 Notion 数据库中查找已有页面（精确匹配 → 模糊匹配）
+3. 找不到则创建新页面，同时写入书名和作者
+4. 读取页面已有的 quote block，与待同步条目去重
+5. 将笔记按页码/位置范围配对到对应高亮
+6. 构建 block（divider → quote → 笔记 → 日期）追加到页面
 
-See the [open issues](https://github.com/paperboi/Kindle2Notion/issues) for a list of proposed features (and known issues).
-
-
-
-<!-- CONTRIBUTING -->
-## Contributing
-
-<!-- Contributions are what make the open source community such an amazing place to be learn, inspire, and create. -->
-Any contributions you make are **greatly appreciated**.
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-
-
-<!-- LICENSE -->
 ## License
 
-Distributed under the MIT License. See [LICENSE][license-url] for more information.
-
-
-
-<!-- CONTACT -->
-## Contact
-
-Jeffrey Jacob ([Twitter](https://twitter.com/jeffreysamjacob) | [Email](mailto:jeffreysamjacob@gmail.com) | [LinkedIn](https://www.linkedin.com/in/jeffreysamjacob/))
-
-
-[downloads-shield]: https://pepy.tech/badge/kindle2notion
-[downloads-url]: https://pepy.tech/project/kindle2notion
-[contributors-shield]: https://img.shields.io/github/contributors/paperboi/Kindle2Notion.svg?style=flat-square
-[contributors-url]: https://github.com/paperboi/Kindle2Notion/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/paperboi/Kindle2Notion.svg?style=flat-square
-[forks-url]: https://github.com/paperboi/Kindle2Notion/network/members
-[stars-shield]: https://img.shields.io/github/stars/paperboi/Kindle2Notion.svg?style=flat-square
-[stars-url]: https://github.com/paperboi/Kindle2Notion/stargazers
-[issues-shield]: https://img.shields.io/github/issues/paperboi/Kindle2Notion.svg?style=flat-square
-[issues-url]: https://github.com/paperboi/Kindle2Notion/issues
-[license-shield]: https://img.shields.io/github/license/paperboi/Kindle2Notion.svg?style=flat-square
-[license-url]: https://github.com/paperboi/kindle2notion/blob/master/LICENSE
-[linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=flat-square&logo=linkedin&colorB=555
-[linkedin-url]: https://www.linkedin.com/in/jeffreysamjacob/
-[product-demo]: https://i.imgur.com/IlDmEOy.gif
+MIT
