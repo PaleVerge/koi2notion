@@ -1,9 +1,19 @@
-from re import findall
+from datetime import datetime
+from re import compile, findall, search, sub
 from typing import Dict, List, Tuple
 
 from dateparser import parse
 
 BOOKS_WO_AUTHORS = []
+
+WEEKDAY_PATTERN = compile(r'星期[一二三四五六日天]|周[一二三四五六日天]')
+CN_PAGE_PATTERN = compile(r'第\s*([\d-]+)\s*页')
+CN_LOCATION_PATTERN = compile(r'位置\s*#?([\d-]+)')
+CN_DATE_PATTERN = compile(
+    r'(?P<year>\d{4})年(?P<month>\d{1,2})月(?P<day>\d{1,2})日'
+    r'(?:\D*(?P<meridiem>上午|下午)\s*(?P<hour>\d{1,2}):(?P<minute>\d{1,2})'
+    r'(?::(?P<second>\d{1,2}))?)?'
+)
 
 ACADEMIC_TITLES = [
     "A.A.",
@@ -129,21 +139,55 @@ def _parse_page_location_date_and_note(
 
     for element in second_line_as_list:
         element = element.lower()
-        if "note" in element:
+        if "note" in element or "笔记" in element:
             is_note = True
         if "page" in element:
             page = element[element.find("page") :].replace("page", "").strip()
+        elif "页" in element:
+            match = search(CN_PAGE_PATTERN, element)
+            if match:
+                page = match.group(1)
         if "location" in element:
             location = (
                 element[element.find("location") :].replace("location", "").strip()
             )
+        elif "位置" in element:
+            match = search(CN_LOCATION_PATTERN, element)
+            if match:
+                location = match.group(1)
         if "added on" in element:
-            date = parse(
+            date = _parse_date(
                 element[element.find("added on") :].replace("added on", "").strip()
             )
-            date = date.strftime("%A, %d %B %Y %I:%M:%S %p")
+        elif "添加于" in element:
+            date = _parse_date(element.split("添加于", 1)[1].strip())
 
     return page, location, date, is_note
+
+
+def _parse_date(date_string: str) -> str:
+    if not date_string:
+        return ""
+    cleaned = sub(WEEKDAY_PATTERN, " ", date_string)
+    match = search(CN_DATE_PATTERN, cleaned)
+    if match:
+        parsed_date = datetime(
+            int(match["year"]), int(match["month"]), int(match["day"])
+        )
+        if match["meridiem"]:
+            hour = int(match["hour"])
+            if match["meridiem"] == "下午" and hour < 12:
+                hour += 12
+            elif match["meridiem"] == "上午" and hour == 12:
+                hour = 0
+            parsed_date = parsed_date.replace(
+                hour=hour, minute=int(match["minute"]), second=int(match["second"] or 0)
+            )
+        return parsed_date.strftime("%A, %d %B %Y %I:%M:%S %p")
+    parsed_date = parse(cleaned)
+    if parsed_date:
+        return parsed_date.strftime("%A, %d %B %Y %I:%M:%S %p")
+    return ""
 
 
 def _add_parsed_items_to_all_books_dict(
@@ -164,11 +208,16 @@ def _add_parsed_items_to_all_books_dict(
 
 def _parse_raw_author_and_title(raw_clipping_list: List) -> Tuple[str, str]:
     author = ""
-    title = raw_clipping_list[0]
+    raw_title = raw_clipping_list[0].strip()
+    title = raw_title
 
-    if findall(r"\(.*?\)", raw_clipping_list[0]):
-        author = (findall(r"\(.*?\)", raw_clipping_list[0]))[-1]
-        author = author.removeprefix("(").removesuffix(")")
+    matches = findall(r"\(.*?\)", raw_title)
+    if matches:
+        author = matches[-1].removeprefix("(").removesuffix(")")
+        if raw_title.endswith(matches[-1]):
+            title = raw_title[: -len(matches[-1])]
+        else:
+            title = raw_title.replace(author, "")
     else:
         if title not in BOOKS_WO_AUTHORS:
             BOOKS_WO_AUTHORS.append(title)
@@ -176,7 +225,15 @@ def _parse_raw_author_and_title(raw_clipping_list: List) -> Tuple[str, str]:
                 f"{title} - No author found. You can manually add the author in the Notion database."
             )
 
-    title = raw_clipping_list[0].replace(author, "").strip().replace(" ()", "")
+    title = title.strip().replace(" ()", "").strip()
+
+    if author.lower() in ("unknown", "未知"):
+        author = ""
+        if title not in BOOKS_WO_AUTHORS:
+            BOOKS_WO_AUTHORS.append(title)
+            print(
+                f"{title} - No author found. You can manually add the author in the Notion database."
+            )
 
     return author, title
 

@@ -41,7 +41,7 @@ This is test highlight 6.
 =========="""
 
     # When
-    actual = raw_clippings_text = read_raw_clippings(test_clippings_file_path)
+    actual = read_raw_clippings(test_clippings_file_path)
 
     # Then
     assert expected == actual

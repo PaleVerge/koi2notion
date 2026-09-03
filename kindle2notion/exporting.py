@@ -1,239 +1,245 @@
+import json
+import re
+import unicodedata
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
-import notional
-from notional.blocks import Paragraph, TextObject, Quote
-from notional.query import TextCondition
-from notional.types import Date, ExternalFile, Number, RichText, Title
-from requests import get
+from kindle2notion.notion_client import NotionClient
 
-# from notional.text import Annotations
-
-# from more_itertools import grouper
-
-
-NO_COVER_IMG = "https://via.placeholder.com/150x200?text=No%20Cover"
+MAX_TEXT_LENGTH = 2000
 
 
 def export_to_notion(
     all_books: Dict,
-    enable_location: bool,
-    enable_highlight_date: bool,
-    enable_book_cover: bool,
-    separate_blocks: bool,
-    notion_api_auth_token: str,
+    notion: NotionClient,
     notion_database_id: str,
+    title_alias_path: Optional[str] = None,
 ) -> None:
-    print("Initiating transfer...\n")
+    print('Initiating transfer...\n')
 
-    for title in all_books:
-        each_book = all_books[title]
-        author = each_book["author"]
-        clippings = each_book["highlights"]
-        clippings_count = len(clippings)
-        (
-            formatted_clippings,
-            last_date,
-        ) = _prepare_aggregated_text_for_one_book(clippings, enable_location, enable_highlight_date)
-        message = _add_book_to_notion(
-            title,
-            author,
-            clippings_count,
-            formatted_clippings,
-            last_date,
-            notion_api_auth_token,
+    alias = _load_title_alias(title_alias_path)
+    title_cache: Dict[str, str] = {}
+
+    for clipped_title, each_book in all_books.items():
+        title = alias.get(clipped_title, clipped_title)
+        _sync_one_book(
+            notion,
             notion_database_id,
-            enable_book_cover,
-            separate_blocks,
+            title,
+            each_book['author'],
+            each_book['highlights'],
+            title_cache,
         )
-        if message != "None to add":
-            print("✓", message)
 
 
-def _prepare_aggregated_text_for_one_book(
-        clippings: List, enable_location: bool, enable_highlight_date: bool
-) -> Tuple[str, str]:
-    # TODO: Special case for books with len(clippings) >= 100 characters. Character limit in a Paragraph block in Notion is 100
-    formatted_clippings = []
-    for each_clipping in clippings:
-        aggregated_text = ""
-        text = each_clipping[0]
-        page = each_clipping[1]
-        location = each_clipping[2]
-        date = each_clipping[3]
-        is_note = each_clipping[4]
-        if is_note == True:
-            aggregated_text += "> " + "NOTE: \n"
-
-        aggregated_text += text + "\n"
-        if enable_location:
-            if page != "":
-                aggregated_text += "Page: " + page + ", "
-            if location != "":
-                aggregated_text += "Location: " + location
-        if enable_highlight_date and (date != ""):
-            aggregated_text += ", Date Added: " + date
-
-        aggregated_text = aggregated_text.strip() + "\n\n"
-        formatted_clippings.append(aggregated_text)
-        last_date = date
-    return formatted_clippings, last_date
-
-
-def _add_book_to_notion(
+def _sync_one_book(
+    notion: NotionClient,
+    notion_database_id: str,
     title: str,
     author: str,
-    clippings_count: int,
-    formatted_clippings: list,
-    last_date: str,
-    notion_api_auth_token: str,
-    notion_database_id: str,
-    enable_book_cover: bool,
-    separate_blocks: bool,
-):
-    notion = notional.connect(auth=notion_api_auth_token)
-    last_date = datetime.strptime(last_date, "%A, %d %B %Y %I:%M:%S %p")
-
-    # Condition variables
-    title_exists = False
-    current_clippings_count = 0
-
-    query = (
-        notion.databases.query(notion_database_id)
-        .filter(property="Title", rich_text=TextCondition(equals=title))
-        .limit(1)
-    )
-    data = query.first()
-
-    if data:
-        title_exists = True
-        block_id = data.id
-        block = notion.pages.retrieve(block_id)
-        if block["Highlights"] == None:
-            block["Highlights"] = Number[0]
-        elif block["Highlights"] == clippings_count:  # if no change in clippings
-            title_and_author = str(block["Title"]) + " (" + str(block["Author"]) + ")"
-            print(title_and_author)
-            print("-" * len(title_and_author))
-            return "None to add.\n"
-
-    title_and_author = title + " (" + str(author) + ")"
+    clippings: List,
+    title_cache: Dict[str, str],
+) -> str:
+    title_and_author = f'{title} ({author})' if author else title
     print(title_and_author)
-    print("-" * len(title_and_author))
+    print('-' * len(title_and_author))
 
-    # Add a new book to the database
-    if not title_exists:
-        new_page = notion.pages.create(
-            parent=notion.databases.retrieve(notion_database_id),
-            properties={
-                "Title": Title[title],
-                "Author": RichText[author],
-                "Highlights": Number[clippings_count],
-                "Last Highlighted": Date[last_date.isoformat()],
-                "Last Synced": Date[datetime.now().isoformat()],
-            },
-            children=[],
-        )
-        # page_content = _update_book_with_clippings(formatted_clippings)
+    page, matched_title = _find_or_create_page(notion, notion_database_id, title, author, title_cache)
+    if matched_title != title:
+        print(f'ℹ Syncing into the existing page "{matched_title}".')
 
+    existing_texts = _collect_existing_quote_texts(notion.list_page_blocks(page['id']))
+    items = _pair_notes_with_highlights(clippings)
 
-        if separate_blocks:
-            for formatted_clipping in formatted_clippings:
-                page_content = Quote[formatted_clipping.strip()]
-                notion.blocks.children.append(new_page, page_content)
-        else:
-            page_content = Paragraph["".join(formatted_clippings)]
-            notion.blocks.children.append(new_page, page_content)
+    new_items = []
+    for item in items:
+        normalized = _normalize_text(item['text'])
+        if not normalized or normalized in existing_texts:
+            continue
+        existing_texts.add(normalized)
+        new_items.append(item)
 
-        block_id = new_page.id
-        if enable_book_cover:
-            # Fetch a book cover from Google Books if the cover for the page is not set
-            if new_page.cover is None:
-                result = _get_book_cover_uri(title, author)
+    if new_items:
+        blocks: List[dict] = []
+        for item in new_items:
+            blocks.extend(_build_clipping_blocks(item))
+        notion.append_blocks(page['id'], blocks)
 
-            if result is None:
-                # Set the page cover to a placeholder image
-                cover = ExternalFile[NO_COVER_IMG]
-                print(
-                    "× Book cover couldn't be found. "
-                    "Please replace the placeholder image with the original book cover manually."
-                )
-            else:
-                # Set the page cover to that of the book
-                cover = ExternalFile[result]
-                print("✓ Added book cover.")
-
-            notion.pages.set(new_page, cover=cover)
+    skipped_count = len(items) - len(new_items)
+    if not new_items:
+        message = 'None to add.'
     else:
-        # update a book that already exists in the database
-        page = notion.pages.retrieve(block_id)
-        # page_content = _update_book_with_clippings(formatted_clippings)
-        page_content = Paragraph["".join(formatted_clippings)]
-        notion.blocks.children.append(page, page_content)
-        # TODO: Delete existing page children (or figure out how to find changes to be made by comparing it with local json file.)
-        current_clippings_count = int(float(str(page["Highlights"])))
-        page["Highlights"] = Number[clippings_count]
-        page["Last Highlighted"] = Date[last_date.isoformat()]
-        page["Last Synced"] = Date[datetime.now().isoformat()]
-
-    # Logging the changes made
-    diff_count = (
-        clippings_count - current_clippings_count
-        if clippings_count > current_clippings_count
-        else clippings_count
-    )
-    message = str(diff_count) + " notes/highlights added successfully.\n"
-
+        message = (
+            f'✓ {len(new_items)} notes/highlights added successfully. '
+            f'{skipped_count} skipped (already in Notion).'
+        )
+    print(message + '\n')
     return message
 
 
-# def _create_rich_text_object(text):
-#     if "Note: " in text:
-#         # Bold text
-#         nested = TextObject._NestedData(content=text)
-#         rich = TextObject(text=nested, plain_text=text, annotations=Annotations(bold=True))
-#     elif any(item in text for item in ["Page: ", "Location: ", "Date Added: "]):
-#         # Italic text
-#         nested = TextObject._NestedData(content=text)
-#         rich = TextObject(text=nested, plain_text=text, annotations=Annotations(italic=True))
-#     else:
-#         # Plain text
-#         nested = TextObject._NestedData(content=text)
-#         rich = TextObject(text=nested, plain_text=text)
-#     return rich
+def _find_or_create_page(
+    notion: NotionClient,
+    notion_database_id: str,
+    title: str,
+    author: str,
+    title_cache: Dict[str, str],
+) -> Tuple[dict, str]:
+    page = notion.query_page_by_title(notion_database_id, title)
+    if page:
+        return page, title
+
+    if not title_cache:
+        title_cache.update(notion.query_all_page_titles(notion_database_id))
+    normalized = _normalize_text(title)
+    matches = [
+        page_id
+        for page_id, page_title in title_cache.items()
+        if _normalize_text(page_title) == normalized
+    ]
+    if len(matches) == 1:
+        matched_title = title_cache[matches[0]]
+        page = notion.query_page_by_title(notion_database_id, matched_title)
+        if page:
+            return page, matched_title
+    if len(matches) > 1:
+        print(
+            f'× Multiple pages match "{title}" after normalizing the title. '
+            'Creating a separate page to avoid merging different books.'
+        )
+
+    page = notion.create_page(notion_database_id, title, author)
+    title_cache[page['id']] = title
+    print('✓ Created a new page in Notion.')
+    return page, title
 
 
-# def _update_book_with_clippings(formatted_clippings):
-#     rtf = []
-#     for each_clipping in formatted_clippings:
-#         each_clipping_list = each_clipping.split("*")
-#         each_clipping_list = list(filter(None, each_clipping_list))
-#         for each_line in each_clipping_list:
-#             rtf.append(_create_rich_text_object(each_line))
-#     print(len(rtf))
-#     content = Paragraph._NestedData(rich_text=rtf)
-#     para = Paragraph(paragraph=content)
-#     return para
+def _pair_notes_with_highlights(clippings: List) -> List[dict]:
+    items = []
+    for text, page, location, date, is_note in clippings:
+        if (
+            is_note
+            and items
+            and not items[-1]['is_note']
+            and _note_belongs_to_highlight(items[-1], page, location)
+        ):
+            items[-1]['note'] = text
+            continue
+        items.append(
+            {
+                'text': text,
+                'page': page,
+                'location': location,
+                'date': date,
+                'note': None,
+                'is_note': is_note,
+            }
+        )
+    return items
 
 
-def _get_book_cover_uri(title: str, author: str):
-    req_uri = "https://www.googleapis.com/books/v1/volumes?q="
+def _note_belongs_to_highlight(highlight: dict, page: str, location: str) -> bool:
+    if location and highlight['location']:
+        return _ranges_overlap(location, highlight['location'])
+    if page and highlight['page']:
+        return _ranges_overlap(page, highlight['page'])
+    return False
 
-    if title is None:
-        return
-    req_uri += "intitle:" + title
 
-    if author is not None:
-        req_uri += "+inauthor:" + author
+def _ranges_overlap(a: str, b: str) -> bool:
+    a_start, a_end = _parse_range(a)
+    b_start, b_end = _parse_range(b)
+    if a_start is None or b_start is None:
+        return a == b
+    return a_start <= b_end and b_start <= a_end
 
-    response = get(req_uri).json().get("items", [])
-    if len(response) > 0:
-        for x in response:
-            if x.get("volumeInfo", {}).get("imageLinks", {}).get("thumbnail"):
-                return (
-                    x.get("volumeInfo", {})
-                    .get("imageLinks", {})
-                    .get("thumbnail")
-                    .replace("http://", "https://")
-                )
-    return
+
+def _parse_range(value: str):
+    match = re.match(r'\s*(\d+)(?:-(\d+))?', value)
+    if not match:
+        return None, None
+    start = int(match.group(1))
+    return start, int(match.group(2) or match.group(1))
+
+
+def _build_clipping_blocks(item: dict) -> List[dict]:
+    blocks = [
+        {'object': 'block', 'type': 'divider', 'divider': {}},
+        {
+            'object': 'block',
+            'type': 'quote',
+            'quote': {'rich_text': _rich_text(item['text'])},
+        },
+    ]
+    if item['note']:
+        blocks.append(
+            {
+                'object': 'block',
+                'type': 'paragraph',
+                'paragraph': {
+                    'rich_text': _rich_text(f'📝 {item["note"]}')
+                },
+            }
+        )
+    added_date = _format_added_date(item['date'])
+    if added_date:
+        blocks.append(
+            {
+                'object': 'block',
+                'type': 'paragraph',
+                'paragraph': {
+                    'rich_text': [
+                        {
+                            'type': 'text',
+                            'text': {'content': f'Added on {added_date}'},
+                            'annotations': {'italic': True, 'color': 'gray'},
+                        }
+                    ]
+                },
+            }
+        )
+    return blocks
+
+
+def _rich_text(content: str) -> List[dict]:
+    return [
+        {'type': 'text', 'text': {'content': content[start : start + MAX_TEXT_LENGTH]}}
+        for start in range(0, len(content), MAX_TEXT_LENGTH)
+    ]
+
+
+def _collect_existing_quote_texts(blocks: List[dict]) -> set:
+    texts = set()
+    for block in blocks:
+        if block.get('type') != 'quote':
+            continue
+        rich_text = block.get('quote', {}).get('rich_text', [])
+        plain_text = ''.join(rt.get('plain_text', '') for rt in rich_text)
+        if plain_text:
+            texts.add(_normalize_text(plain_text))
+    return texts
+
+
+def _normalize_text(text: str) -> str:
+    return ' '.join(unicodedata.normalize('NFC', text).casefold().split())
+
+
+def _format_added_date(date: str) -> Optional[str]:
+    if not date:
+        return None
+    parsed = datetime.strptime(date, '%A, %d %B %Y %I:%M:%S %p')
+    return parsed.strftime('%Y-%m-%d %H:%M')
+
+
+def _load_title_alias(title_alias_path: Optional[str]) -> Dict[str, str]:
+    if not title_alias_path:
+        return {}
+    try:
+        with open(title_alias_path, 'r', encoding='utf-8') as alias_file:
+            alias = json.load(alias_file)
+    except (OSError, ValueError):
+        print(f'× Could not read the title alias file: {title_alias_path}')
+        return {}
+    if not isinstance(alias, dict):
+        print('× The title alias file must contain a JSON object.')
+        return {}
+    return alias

@@ -245,6 +245,176 @@ def test_parse_page_location_date_and_note_should_parse_the_page_and_date_when_t
     assert expected == actual
 
 
+def test_parse_raw_clippings_text_should_parse_koreader_my_clippings_format():
+    # Given
+    test_clippings_file_path = (
+        Path(__file__).parent.absolute() / "test_data/KOReader Clippings.txt"
+    )
+    raw_clippings_text = read_raw_clippings(test_clippings_file_path)
+
+    expected = {
+        "三体": {
+            "author": "刘慈欣",
+            "highlights": [
+                (
+                    "给岁月以文明，给时光以生命。",
+                    "123",
+                    "",
+                    "Wednesday, 02 September 2026 10:00:00 AM",
+                    False,
+                ),
+                (
+                    "这句真好",
+                    "123",
+                    "",
+                    "Wednesday, 02 September 2026 10:00:00 AM",
+                    True,
+                ),
+                (
+                    "宇宙很大，生活更大。",
+                    "456",
+                    "",
+                    "Thursday, 03 September 2026 11:30:15 PM",
+                    False,
+                ),
+            ],
+        },
+        "The Book With No Author": {
+            "author": "",
+            "highlights": [
+                (
+                    "A lone highlight.",
+                    "10",
+                    "",
+                    "Tuesday, 01 September 2026 09:15:00 AM",
+                    False,
+                )
+            ],
+        },
+    }
+
+    # When
+    actual = parse_raw_clippings_text(raw_clippings_text)
+
+    # Then
+    assert expected == actual
+
+
+def test_parse_raw_clippings_text_should_parse_the_chinese_kindle_format():
+    # Given
+    test_clippings_file_path = (
+        Path(__file__).parent.absolute() / "test_data/Kindle Clippings (Chinese).txt"
+    )
+    raw_clippings_text = read_raw_clippings(test_clippings_file_path)
+
+    expected = {
+        "张春桥狱中家书（文字）": {
+            "author": "张春桥",
+            "highlights": [
+                (
+                    "而最明智的，反倒是些贫穷朴素的人。",
+                    "",
+                    "269-271",
+                    "Friday, 06 March 2026 08:19:11 PM",
+                    False,
+                ),
+                (
+                    "纯粹的人性有用,战争怎么会发生？",
+                    "",
+                    "271",
+                    "Friday, 06 March 2026 08:20:31 PM",
+                    True,
+                ),
+                (
+                    "纯粹的人道有用,战争怎么会发生？纯粹的精神无法改变物质。",
+                    "",
+                    "271",
+                    "Friday, 06 March 2026 08:21:30 PM",
+                    True,
+                ),
+            ],
+        },
+        "克林索尔的最后夏天（黑塞自传式作品）(果麦经典)": {
+            "author": "赫尔曼·黑塞",
+            "highlights": [
+                (
+                    "一个更热情更短暂的夏天开始了。",
+                    "9",
+                    "55-56",
+                    "Thursday, 12 March 2026 08:25:37 PM",
+                    False,
+                )
+            ],
+        },
+        "要为真理而斗争": {
+            "author": "刘继明",
+            "highlights": [
+                (
+                    "评价……” 刘继明： 迪芬巴赫博士来访",
+                    "11-11",
+                    "",
+                    "Thursday, 05 March 2026 10:59:57 PM",
+                    False,
+                )
+            ],
+        },
+        "哲学小辞典 (合集)": {
+            "author": "",
+            "highlights": [
+                (
+                    "人说这本书把马克思主义变得庸俗和僵化了。",
+                    "4",
+                    "6-7",
+                    "Thursday, 16 April 2026 10:39:01 PM",
+                    False,
+                )
+            ],
+        },
+    }
+
+    # When
+    actual = parse_raw_clippings_text(raw_clippings_text)
+
+    # Then
+    assert expected == actual
+
+
+def test_parse_author_and_title_should_keep_an_author_name_inside_the_title():
+    # Given
+    raw_clipping_list = [
+        "张春桥狱中家书（文字） (张春桥)",
+        "- 您在位置 #24-26的标注 | 添加于 2026年3月1日星期日 下午5:20:08",
+        "",
+        "一些内容。",
+        False,
+    ]
+    expected = ("张春桥", "张春桥狱中家书（文字）")
+
+    # When
+    actual = _parse_author_and_title(raw_clipping_list)
+
+    # Then
+    assert expected == actual
+
+
+def test_parse_author_and_title_should_treat_koreader_unknown_author_as_missing():
+    # Given
+    raw_clipping_list = [
+        "Some Book (Unknown)",
+        "- Your Highlight on page 3 | Added on Friday, April 30, 2021 12:31:29 AM",
+        "",
+        "This is a test highlight.",
+        False,
+    ]
+    expected = ("", "Some Book")
+
+    # When
+    actual = _parse_author_and_title(raw_clipping_list)
+
+    # Then
+    assert expected == actual
+
+
 def test_add_parsed_items_to_books_dict_should_add_the_parsed_items_when_the_book_is_not_already_in_the_books_dict():
     # Given
     books = {}
