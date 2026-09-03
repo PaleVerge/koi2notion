@@ -158,7 +158,6 @@ Thumbs.db
 .idea/
 .code-workspace
 # custom project files
-MyClippings.txt
-dist/
-images/
-my_kindle_clippings.json
+config.json
+sync_state.json
+My Clipping/

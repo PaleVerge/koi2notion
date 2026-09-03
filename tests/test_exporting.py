@@ -23,8 +23,8 @@ class FakeNotionClient:
     def query_all_page_titles(self, database_id):
         return {page["id"]: title for title, page in self.pages.items()}
 
-    def create_page(self, database_id, title):
-        page = {"id": f"page-{title}", "cover": None}
+    def create_page(self, database_id, title, author=''):
+        page = {"id": f"page-{title}"}
         self.pages[title] = page
         return page
 
@@ -260,7 +260,7 @@ def test_export_to_notion_should_create_a_new_page_and_append_readest_style_bloc
 def test_export_to_notion_should_skip_highlights_already_present_in_notion():
     # Given
     notion = FakeNotionClient(
-        pages={'三体': {'id': 'page-1', 'cover': None}},
+        pages={'三体': {'id': 'page-1'}},
         blocks={
             'page-1': [
                 {
@@ -309,7 +309,7 @@ def test_export_to_notion_should_skip_highlights_already_present_in_notion():
 
 def test_export_to_notion_should_reuse_a_page_with_an_equivalent_title():
     # Given
-    notion = FakeNotionClient(pages={'The Book Title': {'id': 'page-1', 'cover': None}})
+    notion = FakeNotionClient(pages={'The Book Title': {'id': 'page-1'}})
     all_books = {
         'the  book   title': {
             'author': 'An Author',
@@ -331,7 +331,7 @@ def test_export_to_notion_should_apply_the_title_alias_file(tmp_path):
     # Given
     alias_file = tmp_path / 'alias.json'
     alias_file.write_text(json.dumps({'三体（Kindle）': '三体'}), encoding='utf-8')
-    notion = FakeNotionClient(pages={'三体': {'id': 'page-1', 'cover': None}})
+    notion = FakeNotionClient(pages={'三体': {'id': 'page-1'}})
     all_books = {
         '三体（Kindle）': {
             'author': '刘慈欣',
